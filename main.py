@@ -8,8 +8,33 @@ from telegram.ext import (
     filters
 )
 
-# Import config + internal modules
-from config import BOT_TOKEN, LOGGING_FORMAT
+# ------------------ MERGED CONFIG ------------------
+BOT_TOKEN = "8389093783:AAFiQGG8SLs9ba7AmEHFrFMPzvqYUtOcGYU"
+OWNER_ID = 6847499628
+
+BOT_NAME = "Era Escrow Bot"
+POWERED_BY = "@LuffyBots"
+
+DB_PATH = "data/escrow.db"
+
+IST_OFFSET_HOURS = 5
+IST_OFFSET_MINUTES = 30
+
+DIVIDER = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+DEFAULT_FEE_PERCENT = 5
+DEFAULT_MIN_FEE = 5
+
+DEFAULT_WELCOME = "👋 Welcome {user}!"
+DEFAULT_FAREWELL = "👋 Goodbye {user}!"
+
+TIME_FORMAT = "%I:%M %p"
+
+LOGGING_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+# ---------------------------------------------------
+
+
+# Import internal modules
 from database import init_database
 from handlers.admin import (
     cmds_handler,
