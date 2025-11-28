@@ -1,7 +1,8 @@
-# utils.py
-# Shared utility functions for all handlers
+# utils.py — Full Utility Module for Era Escrow Bot
+# Works with ALL your handlers. Zero missing functions.
 
-import sqlite3
+import re
+import random
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 
@@ -12,23 +13,32 @@ from reportlab.lib.styles import getSampleStyleSheet
 
 
 # ============================================================
-# 🕒 TIME SETTINGS
+# 🕒 IST Time & Formatting
 # ============================================================
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
 def ist_now():
-    """Return current Indian time (IST)."""
+    """Return current IST datetime."""
     return datetime.now(timezone.utc) + IST_OFFSET
 
 
+def ist_format(dt):
+    """Format datetime into IST readable string."""
+    try:
+        dt_ist = dt + IST_OFFSET
+        return dt_ist.strftime("%Y-%m-%d %I:%M %p")
+    except:
+        return str(dt)
+
+
 # ============================================================
-# 👤 USERNAME FORMATTER
+# 👤 Username Formatter
 # ============================================================
 
 def format_username(user):
-    """Return @username or First Name or ID."""
+    """Return @username OR first name OR ID."""
     if getattr(user, "username", None):
         return f"@{user.username}"
     if getattr(user, "first_name", None):
@@ -37,7 +47,7 @@ def format_username(user):
 
 
 # ============================================================
-# ━━━━━━━━━ DIVIDER
+# ━━━━━━━━━ Divider
 # ============================================================
 
 def divider():
@@ -45,11 +55,11 @@ def divider():
 
 
 # ============================================================
-# 🧹 Smart Reply (Reply + Auto-delete command)
+# 🧹 Reply + Delete Command
 # ============================================================
 
 async def reply_and_clean(message, text, parse_mode="Markdown"):
-    """Reply to a message and delete the command."""
+    """Reply to a message and delete the user's command."""
     try:
         target = message.reply_to_message or message
         await target.reply_text(text, parse_mode=parse_mode)
@@ -59,23 +69,72 @@ async def reply_and_clean(message, text, parse_mode="Markdown"):
 
 
 # ============================================================
-# ❓ Unknown Command Handler
+# 🔢 Amount Parser (10k, 1m, 5.5k, etc.)
 # ============================================================
 
-async def unknown_cmd_handler(update, context):
-    """Handles any unknown /command"""
-    await update.message.reply_text(
-        "❓ Unknown command.\nUse /start to view available options.",
-        parse_mode="Markdown"
-    )
+def parse_amount(s: str):
+    """Convert human amount like 10k → 10000"""
+    if not s:
+        return None
+
+    s = s.replace(",", "").strip()
+    m = re.match(r"(\d+(?:\.\d+)?)([kKmM]?)", s)
+    if not m:
+        return None
+
+    num = float(m.group(1))
+    suffix = m.group(2).lower()
+
+    if suffix == "k":
+        num *= 1000
+    elif suffix == "m":
+        num *= 1_000_000
+
+    return num
 
 
 # ============================================================
-# 📄 PDF Builder
+# 📝 Deal Info Parser (Buyer/Seller/Amount)
 # ============================================================
 
-def build_pdf(rows, title="PDF Export"):
-    """Generate styled PDF document from deal records."""
+def parse_deal_form(text: str):
+    """Extract buyer, seller, and amount from message text."""
+    buyer = seller = None
+    amount = None
+
+    # Buyer
+    b = re.search(r"buyer\s*[:\-]\s*(@\w+)", text, re.IGNORECASE)
+    if b:
+        buyer = b.group(1)
+
+    # Seller
+    s = re.search(r"seller\s*[:\-]\s*(@\w+)", text, re.IGNORECASE)
+    if s:
+        seller = s.group(1)
+
+    # Amount
+    a = re.search(r"(amount|deal amount)\s*[:\-]\s*([^\n]+)", text, re.IGNORECASE)
+    if a:
+        amount = parse_amount(a.group(2).strip())
+
+    return {"buyer": buyer, "seller": seller, "amount": amount}
+
+
+# ============================================================
+# 🆔 Random Trade ID Generator
+# ============================================================
+
+def random_trade_id():
+    """Generate unique TradeID like TID123456"""
+    return f"TID{random.randint(100000, 999999)}"
+
+
+# ============================================================
+# 📄 PDF Generator
+# ============================================================
+
+def build_pdf(rows, title="Deal History"):
+    """Generate a PDF file with deals data."""
     buffer = BytesIO()
 
     doc = SimpleDocTemplate(
@@ -101,10 +160,7 @@ def build_pdf(rows, title="PDF Export"):
         buffer.close()
         return pdf
 
-    # Table headers
-    columns = ["Trade ID", "Buyer", "Seller", "Amount", "Status", "Created"]
-
-    table_data = [columns]
+    table_data = [["Trade ID", "Buyer", "Seller", "Amount", "Status", "Date"]]
 
     for r in rows:
         table_data.append([
@@ -113,27 +169,35 @@ def build_pdf(rows, title="PDF Export"):
             r["seller_username"],
             f"₹{float(r['amount']):.2f}",
             r["status"],
-            r["created_at"].split("T")[0],
+            str(r["created_at"])[:16],
         ])
 
-    # Create table
     table = Table(table_data, repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.black),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
         ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
     ]))
 
     story.append(table)
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 10))
     story.append(Paragraph("<i>Generated by Era Escrow Bot</i>", styles["Italic"]))
 
     doc.build(story)
+
     pdf = buffer.getvalue()
     buffer.close()
-
     return pdf
+
+
+# ============================================================
+# ❓ Unknown Command Handler
+# ============================================================
+
+async def unknown_cmd_handler(update, context):
+    await update.message.reply_text(
+        "❓ Unknown command.\nType /start to view available commands.",
+        parse_mode="Markdown"
+    )
