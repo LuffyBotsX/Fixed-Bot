@@ -8,7 +8,10 @@ from telegram.ext import (
     filters
 )
 
-# ------------------ MERGED CONFIG ------------------
+# ==========================================
+# 🔐 BOT CONFIG (Inside main.py as requested)
+# ==========================================
+
 BOT_TOKEN = "8389093783:AAFiQGG8SLs9ba7AmEHFrFMPzvqYUtOcGYU"
 OWNER_ID = 6847499628
 
@@ -16,26 +19,18 @@ BOT_NAME = "Era Escrow Bot"
 POWERED_BY = "@LuffyBots"
 
 DB_PATH = "data/escrow.db"
-
-IST_OFFSET_HOURS = 5
-IST_OFFSET_MINUTES = 30
-
 DIVIDER = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-DEFAULT_FEE_PERCENT = 5
-DEFAULT_MIN_FEE = 5
-
-DEFAULT_WELCOME = "👋 Welcome {user}!"
-DEFAULT_FAREWELL = "👋 Goodbye {user}!"
-
-TIME_FORMAT = "%I:%M %p"
-
 LOGGING_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-# ---------------------------------------------------
 
+# ==========================================
+# 📦 INTERNAL MODULE IMPORTS
+# ==========================================
 
-# Import internal modules
 from database import init_database
+from utils import unknown_cmd_handler
+
+# Handlers
 from handlers.admin import (
     cmds_handler,
     menu_handler,
@@ -54,6 +49,7 @@ from handlers.admin import (
     admin_compare_handler,
     top_admins_handler,
 )
+
 from handlers.deals import (
     add_deal_handler,
     close_deal_handler,
@@ -65,6 +61,7 @@ from handlers.deals import (
     holding_handler,
     notify_handler,
 )
+
 from handlers.user import (
     start_handler,
     stats_handler,
@@ -78,6 +75,7 @@ from handlers.user import (
     global_stats_handler,
     topuser_handler,
 )
+
 from handlers.moderation import (
     warn_handler,
     unwarn_handler,
@@ -93,6 +91,7 @@ from handlers.moderation import (
     clean_warns_handler,
     clean_notes_handler,
 )
+
 from handlers.groups import (
     set_group_handler,
     remove_group_handler,
@@ -101,15 +100,17 @@ from handlers.groups import (
     set_farewell_handler,
     toggle_welcome_handler,
 )
+
 from handlers.logs import (
     test_handler,
     chatid_handler,
 )
 
-from utils import unknown_cmd_handler
 
+# ==========================================
+# 📝 LOGGER
+# ==========================================
 
-# --------------------- LOGGER ---------------------
 logging.basicConfig(
     level=logging.INFO,
     format=LOGGING_FORMAT
@@ -117,8 +118,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# --------------------- MAIN -----------------------
+# ==========================================
+# 🚀 MAIN BOT FUNCTION
+# ==========================================
+
 def main():
+
     logger.info("📦 Initializing database...")
     init_database()
 
@@ -188,7 +193,7 @@ def main():
     app.add_handler(CommandHandler("clean_warns", clean_warns_handler))
     app.add_handler(CommandHandler("clean_notes", clean_notes_handler))
 
-    # ========== GROUP / WELCOME ==========
+    # ========== GROUP MANAGEMENT ==========
     app.add_handler(CommandHandler("setgroup", set_group_handler))
     app.add_handler(CommandHandler("removegroup", remove_group_handler))
     app.add_handler(CommandHandler("groups", groups_handler))
@@ -203,12 +208,16 @@ def main():
     # ========== CALLBACK QUERIES ==========
     app.add_handler(CallbackQueryHandler(menu_handler))
 
-    # ========== UNKNOWN COMMAND ==========
+    # UNKNOWN COMMAND
     app.add_handler(MessageHandler(filters.COMMAND, unknown_cmd_handler))
 
     logger.info("🚀 Bot is now running...")
     app.run_polling()
 
+
+# ==========================================
+# 🔥 START BOT
+# ==========================================
 
 if __name__ == "__main__":
     main()
