@@ -1,41 +1,51 @@
 # handlers/user.py
-# User-level commands (stats, deals, summaries, PDFs, etc.)
+# User Commands: start, stats, mydeals, PDFs, global stats, top users, etc.
 
 from telegram import Update, InputFile
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from io import BytesIO
+from datetime import datetime, timedelta, timezone
 
 from database import connect
-from utils import format_username, ist_now, ist_format, DIVIDER
+from utils import (
+    format_username,
+    ist_now,
+    ist_format,
+    DIVIDER
+)
+from pdfbuilder import build_history_pdf, build_escrow_pdf
 
 
 # ============================================================
-# 📌 /start — Welcome message
+# 🚀 /start — Welcome Message
 # ============================================================
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     text = (
-        f"🤖 *Welcome to Era Escrow Bot!*\n"
+        f"✨ *Welcome to Era Escrow Bot!* ✨\n"
         f"{DIVIDER}\n"
-        f"👤 User: {format_username(user)}\n"
-        f"🆔 ID: `{user.id}`\n\n"
-        "This bot safely manages escrow deals between Buyer & Seller.\n"
-        "• Trusted Deal Creation\n"
-        "• Auto Status Tracking\n"
-        "• Secure Payout System\n"
-        "• Admin Fees Tracking\n\n"
-        "Type `/stats` to see your profile.\n"
-        "Admins can use `/cmds` for full panel."
+        f"👤 *User:* {format_username(user)}\n"
+        f"🆔 *ID:* `{user.id}`\n\n"
+        "🔐 This bot helps you perform safe escrow deals:\n"
+        "• Secure Buyer ↔ Seller deals\n"
+        "• Track active, completed & refunded deals\n"
+        "• Generate full PDFs of your history\n\n"
+        "Use:\n"
+        "• `/stats` — Your stats\n"
+        "• `/mydeals` — Your transactions\n"
+        "• `/history` — Complete PDF\n"
+        "• `/escrow` — Your created deals\n"
+        "• `/topuser` — Top traders\n"
     )
 
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /stats — Self Stats
+# 📊 /stats — User Trading Stats
 # ============================================================
 
 async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,8 +59,11 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         SELECT 
             COUNT(*) AS total,
             SUM(amount) AS volume,
-            MAX(amount) AS biggest,
-            MIN(amount) AS smallest
+            SUM(CASE WHEN status IN ('released','completed') THEN 1 END) AS completed,
+            SUM(CASE WHEN status='active' THEN 1 END) AS active,
+            SUM(CASE WHEN status IN ('cancelled','refunded') THEN 1 END) AS canceled,
+            MIN(created_at) AS first_deal,
+            MAX(created_at) AS last_deal
         FROM deals
         WHERE buyer_username=? OR seller_username=? OR created_by=?
     """, (uname, uname, user.id))
@@ -58,39 +71,41 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = cur.fetchone()
     conn.close()
 
-    total = row["total"] or 0
-    volume = row["volume"] or 0
-
-    if total == 0:
+    if row["total"] == 0:
         return await update.message.reply_text(
-            f"ℹ️ {uname} does not have any recorded deals yet.",
+            f"ℹ️ User {uname} has no recorded deals yet.",
             parse_mode="Markdown"
         )
 
     text = (
-        f"📊 *Your Trading Stats — {uname}*\n"
+        f"📊 *Your Trading Stats*\n"
         f"{DIVIDER}\n"
-        f"• Total Deals: `{total}`\n"
-        f"• Total Volume: ₹{volume:.2f}\n"
-        f"• Biggest Deal: ₹{(row['biggest'] or 0):.2f}\n"
-        f"• Smallest Deal: ₹{(row['smallest'] or 0):.2f}\n"
+        f"👤 Username: {uname}\n"
+        f"📍 Total Deals: `{row['total']}`\n"
+        f"💰 Total Worth: ₹{(row['volume'] or 0):.2f}\n"
+        f"🎯 Completed: `{row['completed'] or 0}`\n"
+        f"🟡 Active: `{row['active'] or 0}`\n"
+        f"❌ Cancelled/Refunded: `{row['canceled'] or 0}`\n"
+        f"⏱ First Deal: `{ist_format(row['first_deal'])}`\n"
+        f"⏱ Last Deal: `{ist_format(row['last_deal'])}`\n"
     )
 
-    await update.message.reply_text(text, parse_mode="Markdown)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /stats @username — Tagged Stats
+# 📌 /stats @username — Tag Stats
 # ============================================================
 
 async def stats_tag_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.message
-    parts = msg.text.split()
 
-    if len(parts) < 2:
-        return await msg.reply_text("Usage: `/stats @username`", parse_mode="Markdown")
+    msg = update.message.text.split()
+    if len(msg) < 2:
+        return
 
-    uname = parts[1].lower()
+    target = msg[1].strip().lower()
+    if not target.startswith("@"):
+        target = "@" + target
 
     conn = connect()
     cur = conn.cursor()
@@ -98,33 +113,37 @@ async def stats_tag_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("""
         SELECT 
             COUNT(*) AS total,
-            SUM(amount) AS volume
+            SUM(amount) AS volume,
+            MIN(created_at) AS first_deal,
+            MAX(created_at) AS last_deal
         FROM deals
-        WHERE LOWER(buyer_username)=? OR LOWER(seller_username)=?
-    """, (uname, uname))
+        WHERE buyer_username=? OR seller_username=?
+    """, (target, target))
 
     row = cur.fetchone()
     conn.close()
 
-    if not row or row["total"] == 0:
-        return await msg.reply_text(
-            f"ℹ️ User {uname} has not been involved in any recorded deals.",
+    if row["total"] == 0:
+        return await update.message.reply_text(
+            f"ℹ️ User {target} has not been involved in any recorded deals.",
             parse_mode="Markdown"
         )
 
     text = (
-        f"📊 *User Stats for {uname}*\n"
+        f"📊 *Participant Stats for {target}*\n"
         f"{DIVIDER}\n"
-        f"• Total Deals: `{row['total']}`\n"
-        f"• Total Volume: ₹{row['volume']:.2f}\n"
-        "• Ranking: Coming Soon…\n"
+        f"🧾 Total Deals: `{row['total']}`\n"
+        f"💰 Total Volume: ₹{(row['volume'] or 0):.2f}\n"
+        f"⏱ First Deal: `{ist_format(row['first_deal'])}`\n"
+        f"⏱ Last Deal: `{ist_format(row['last_deal'])}`\n\n"
+        "⚠️ Always use a trusted escrow!"
     )
 
-    await msg.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /mydeals — Show user’s recent deals
+# 🧾 /mydeals — User Deal List
 # ============================================================
 
 async def my_deals_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,66 +158,29 @@ async def my_deals_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         FROM deals
         WHERE buyer_username=? OR seller_username=? OR created_by=?
         ORDER BY id DESC
-        LIMIT 20
+        LIMIT 25
     """, (uname, uname, user.id))
 
     rows = cur.fetchall()
     conn.close()
 
     if not rows:
-        return await update.message.reply_text("ℹ️ You do not have any deals yet.")
+        return await update.message.reply_text("ℹ️ You haven't made any deals yet.")
 
-    txt = "🧾 *Your Recent Deals*\n" + DIVIDER + "\n\n"
+    text = f"🧾 *Your Deals*\n{DIVIDER}\n\n"
 
     for r in rows:
-        txt += (
-            f"`#{r['trade_id']}` | {r['buyer_username']} → {r['seller_username']} | "
+        text += (
+            f"`#{r['trade_id']}` | "
+            f"{r['buyer_username']} → {r['seller_username']} | "
             f"₹{r['amount']:.2f} | *{r['status']}*\n"
         )
 
-    await update.message.reply_text(txt, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /find @user — Admin search
-# ============================================================
-
-async def find_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        return await update.message.reply_text("Usage: `/find @username`")
-
-    uname = context.args[0].lower()
-
-    conn = connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT trade_id, buyer_username, seller_username, amount
-        FROM deals
-        WHERE status='active'
-        AND (LOWER(buyer_username)=? OR LOWER(seller_username)=?)
-    """, (uname, uname))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    if not rows:
-        return await update.message.reply_text(f"ℹ️ No active deals for {uname}.")
-
-    txt = f"🔍 *Active Deals for {uname}*\n{DIVIDER}\n\n"
-
-    for r in rows:
-        txt += (
-            f"`#{r['trade_id']}` | "
-            f"{r['buyer_username']} → {r['seller_username']} | "
-            f"₹{r['amount']:.2f}\n"
-        )
-
-    await update.message.reply_text(txt, parse_mode="Markdown")
-
-
-# ============================================================
-# 📌 /today — Today's summary
+# 📅 /today — Today’s Activity
 # ============================================================
 
 async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,31 +188,42 @@ async def today_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = connect()
     cur = conn.cursor()
-
     cur.execute("SELECT * FROM deals")
     rows = cur.fetchall()
     conn.close()
 
-    total = volume = 0
+    t = vol = comp = act = canc = 0
 
-    for d in rows:
-        dt = ist_format(d["created_at"])
-        if str(today) in dt:
-            total += 1
-            volume += d["amount"] or 0
+    for r in rows:
+        dt = datetime.fromisoformat(r["created_at"]) + timedelta(hours=5, minutes=30)
+        if dt.date() != today:
+            continue
 
-    txt = (
-        "📅 *Today's Summary*\n"
+        t += 1
+        vol += r["amount"]
+
+        if r["status"] in ("released","completed"):
+            comp += 1
+        elif r["status"] == "active":
+            act += 1
+        else:
+            canc += 1
+
+    text = (
+        f"📅 *Today's Summary*\n"
         f"{DIVIDER}\n"
-        f"• Deals: `{total}`\n"
-        f"• Volume: ₹{volume:.2f}\n"
+        f"📦 Total Deals: `{t}`\n"
+        f"💰 Volume: ₹{vol:.2f}\n"
+        f"✔ Completed: `{comp}`\n"
+        f"🟡 Active: `{act}`\n"
+        f"❌ Cancelled/Refunded: `{canc}`"
     )
 
-    await update.message.reply_text(txt, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /week — Weekly summary
+# 📆 /week — Weekly Summary
 # ============================================================
 
 async def week_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -243,98 +236,72 @@ async def week_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = cur.fetchall()
     conn.close()
 
-    total = volume = 0
+    t = vol = comp = act = canc = 0
 
-    for d in rows:
-        dt = ist_format(d["created_at"]).split()[0]  
-        try:
-            date_dt = datetime.strptime(dt, "%Y-%m-%d").date()
-        except:
+    for r in rows:
+        dt = datetime.fromisoformat(r["created_at"]) + timedelta(hours=5, minutes=30)
+
+        if not (week_start <= dt.date() <= today):
             continue
 
-        if week_start <= date_dt <= today:
-            total += 1
-            volume += d["amount"] or 0
+        t += 1
+        vol += r["amount"]
 
-    txt = (
-        "📆 *Weekly Summary*\n"
+        if r["status"] in ("released", "completed"):
+            comp += 1
+        elif r["status"] == "active":
+            act += 1
+        else:
+            canc += 1
+
+    text = (
+        f"📆 *Weekly Summary*\n"
         f"{DIVIDER}\n"
-        f"• Deals: `{total}`\n"
-        f"• Volume: ₹{volume:.2f}\n"
+        f"📅 {week_start} → {today}\n"
+        f"📦 Total Deals: `{t}`\n"
+        f"💰 Volume: ₹{vol:.2f}\n"
+        f"✔ Completed: `{comp}`\n"
+        f"🟡 Active: `{act}`\n"
+        f"❌ Cancelled/Refunded: `{canc}`"
     )
 
-    await update.message.reply_text(txt, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /escrow — PDF Summary (deals created by user)
+# 📜 /escrow — Deals created *by user* (PDF)
 # ============================================================
 
 async def escrow_pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    conn = connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM deals
-        WHERE created_by=?
-        ORDER BY id DESC
-    """, (user.id,))
-
-    deals = cur.fetchall()
-    conn.close()
-
-    if not deals:
-        return await update.message.reply_text("ℹ️ You have not created any deals as Escrow.")
-
-    pdf = BytesIO()
-    pdf.write(b"PDF report generation placeholder.")
-    pdf.seek(0)
+    pdf_bytes = build_escrow_pdf(user.id, format_username(user))
+    filename = f"escrow_{user.id}.pdf"
 
     await update.message.reply_document(
-        document=InputFile(pdf, filename="escrow_summary.pdf"),
-        caption="📜 Escrow Summary PDF"
+        InputFile(BytesIO(pdf_bytes), filename=filename),
+        caption="📜 Your Escrow Summary PDF"
     )
 
 
 # ============================================================
-# 📌 /history — PDF All deals
+# 📄 /history — Complete User History PDF
 # ============================================================
 
 async def history_pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    uname = format_username(user)
 
-    conn = connect()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT *
-        FROM deals
-        WHERE buyer_username=? OR seller_username=? OR created_by=?
-        ORDER BY id DESC
-    """, (uname, uname, user.id))
-
-    deals = cur.fetchall()
-    conn.close()
-
-    if not deals:
-        return await update.message.reply_text("ℹ️ No deal history found.")
-
-    pdf = BytesIO()
-    pdf.write(b"User deal history placeholder PDF.")
-    pdf.seek(0)
+    pdf_bytes = build_history_pdf(user.id, format_username(user))
+    filename = f"history_{user.id}.pdf"
 
     await update.message.reply_document(
-        document=InputFile(pdf, filename="history.pdf"),
-        caption="📜 Full Deal History PDF"
+        InputFile(BytesIO(pdf_bytes), filename=filename),
+        caption="📄 Complete Deal History PDF"
     )
 
 
 # ============================================================
-# 📌 /gstats — Global Stats
+# 🌍 /gstats — Global Stats
 # ============================================================
 
 async def global_stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -343,30 +310,30 @@ async def global_stats_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT COUNT(*) AS total,
-               SUM(amount) AS volume,
-               SUM(CASE WHEN status='active' THEN 1 END) AS active,
-               SUM(CASE WHEN status IN ('completed','released') THEN 1 END) AS completed
+        SELECT 
+            COUNT(*) AS total,
+            SUM(amount) AS volume,
+            SUM(CASE WHEN status IN ('released','completed') THEN 1 END) AS completed,
+            SUM(CASE WHEN status='active' THEN 1 END) AS active
         FROM deals
     """)
-
     row = cur.fetchone()
     conn.close()
 
     text = (
-        "🌐 *Global Escrow Stats*\n"
+        f"🌍 *Global Escrow Stats*\n"
         f"{DIVIDER}\n"
-        f"• Total Deals: `{row['total']}`\n"
-        f"• Total Volume: ₹{(row['volume'] or 0):.2f}\n"
-        f"• Active: `{row['active']}`\n"
-        f"• Completed: `{row['completed']}`\n"
+        f"📦 Total Deals: `{row['total']}`\n"
+        f"💰 Total Volume: ₹{(row['volume'] or 0):.2f}\n"
+        f"✔ Completed: `{row['completed'] or 0}`\n"
+        f"🟡 Active: `{row['active'] or 0}`\n"
     )
 
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /topuser — Top Users Ranking
+# 🏆 /topuser — Top Traders
 # ============================================================
 
 async def topuser_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -375,24 +342,29 @@ async def topuser_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT buyer_username AS user, SUM(amount) AS volume 
-        FROM deals WHERE status IN ('completed','released')
-        GROUP BY buyer_username
-        ORDER BY volume DESC
-        LIMIT 20
+        SELECT buyer_username, seller_username, amount
+        FROM deals 
+        WHERE status IN ('released','completed')
     """)
 
     rows = cur.fetchall()
     conn.close()
 
-    if not rows:
-        return await update.message.reply_text("ℹ️ No completed deals found.")
+    volume = {}
 
-    txt = "🏆 *Top Traders*\n" + DIVIDER + "\n\n"
-
-    rank = 1
     for r in rows:
-        txt += f"#{rank} — {r['user']} → ₹{r['volume']:.2f}\n"
-        rank += 1
+        for u in ["buyer_username", "seller_username"]:
+            if r[u]:
+                volume[u] = volume.get(u, 0) + r["amount"]
 
-    await update.message.reply_text(txt, parse_mode="Markdown")
+    ranking = sorted(volume.items(), key=lambda x: x[1], reverse=True)[:20]
+
+    if not ranking:
+        return await update.message.reply_text("ℹ️ No completed deals yet.")
+
+    text = "🏆 *Top Traders*\n" + DIVIDER + "\n\n"
+
+    for i, (user, vol) in enumerate(ranking, 1):
+        text += f"{i}. {user} — ₹{vol:.2f}\n"
+
+    await update.message.reply_text(text, parse_mode="Markdown")
