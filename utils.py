@@ -1,48 +1,31 @@
 # utils.py
-# Utility functions for Era Escrow Bot
+# Shared utility functions for all handlers
 
-from telegram import ChatMember
-from telegram.constants import ParseMode
-from datetime import datetime, timedelta, timezone
+import os
+import sqlite3
+from datetime import datetime, timezone, timedelta
+from io import BytesIO
 
-# Divider for UI
-DIVIDER = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
-# India Time Offset
+# BOT TIMEZONE (IST)
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
 
 # ============================================================
-# 🕒 Get Current IST Time
+# 📌 Basic Helpers
 # ============================================================
 
 def ist_now():
-    """
-    Returns current IST datetime object.
-    """
+    """Return current Indian time (IST)."""
     return datetime.now(timezone.utc) + IST_OFFSET
 
 
-def ist_format(timestamp: str):
-    """
-    Convert ISO timestamp to readable IST time format.
-    """
-    try:
-        dt = datetime.fromisoformat(timestamp)
-        dt = dt + IST_OFFSET
-        return dt.strftime("%Y-%m-%d %I:%M %p")
-    except:
-        return timestamp
-
-
-# ============================================================
-# 🧑 Format Username
-# ============================================================
-
 def format_username(user):
-    """
-    Converts user object to @username or first name.
-    """
+    """Format telegram username or fallback to first name."""
     if getattr(user, "username", None):
         return f"@{user.username}"
     if getattr(user, "first_name", None):
@@ -50,63 +33,88 @@ def format_username(user):
     return str(user.id)
 
 
+def divider():
+    """Pretty line divider."""
+    return "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+
 # ============================================================
-# 🛡 Ensure Bot is Admin in Group
+# 📌 reply_and_clean() — Smart Reply Helper
 # ============================================================
 
-async def ensure_bot_admin(update, context):
+async def reply_and_clean(message, text, parse_mode="Markdown"):
     """
-    Check if bot is admin before performing group actions.
-    """
-    chat = update.effective_chat
-    bot_id = context.bot.id
-
-    try:
-        member = await context.bot.get_chat_member(chat.id, bot_id)
-    except:
-        return False
-
-    if member.status not in [ChatMember.ADMINISTRATOR, ChatMember.OWNER]:
-        await update.message.reply_text(
-            "❌ *I must be an Admin in this group to manage deals.*\n\n"
-            "Please enable permissions:\n"
-            "• Delete messages\n"
-            "• Manage messages\n"
-            "• Read all messages",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        return False
-
-    return True
-
-
-# ============================================================
-# ✉️ Clean Reply + Delete Command
-# ============================================================
-
-async def reply_and_clean(message, text, parse_mode=ParseMode.MARKDOWN):
-    """
-    Replies to user's message OR the replied message,
-    then deletes the command message safely.
+    Replies to message, then deletes the user's command.
+    Works in private & group.
     """
     try:
         target = message.reply_to_message or message
         await target.reply_text(text, parse_mode=parse_mode)
         await message.delete()
     except:
-        # If delete fails, still respond
         await message.reply_text(text, parse_mode=parse_mode)
 
 
 # ============================================================
-# ❓ Unknown Command
+# 📌 PDF BUILDER for /history, /escrow
 # ============================================================
 
-async def unknown_cmd_handler(update, context):
-    """
-    Handles unknown commands.
-    """
-    await update.message.reply_text(
-        "❓ Unknown command.\nType /cmds if you're an admin.",
-        parse_mode=ParseMode.MARKDOWN
+def build_pdf(rows, title="PDF Export"):
+    """Generate styled PDF with deal records."""
+    buffer = BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=25,
+        leftMargin=25,
+        topMargin=25,
+        bottomMargin=25,
     )
+
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph(f"<b>{title}</b>", styles["Title"]))
+    story.append(Spacer(1, 12))
+
+    if not rows:
+        story.append(Paragraph("No records found.", styles["Normal"]))
+        doc.build(story)
+        pdf = buffer.getvalue()
+        buffer.close()
+        return pdf
+
+    columns = ["Trade ID", "Buyer", "Seller", "Amount", "Status", "Date"]
+    table_data = [columns]
+
+    for r in rows:
+        table_data.append([
+            r["trade_id"],
+            r["buyer_username"],
+            r["seller_username"],
+            f"₹{float(r['amount']):.2f}",
+            r["status"],
+            r["created_at"].split("T")[0] if "T" in r["created_at"] else r["created_at"],
+        ])
+
+    table = Table(table_data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.black),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+    ]))
+
+    story.append(table)
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("<i>Generated via Era Escrow Bot</i>", styles["Italic"]))
+
+    doc.build(story)
+
+    pdf = buffer.getvalue()
+    buffer.close()
+    return pdf
