@@ -1,215 +1,82 @@
 # utils.py
 # Utility functions for Era Escrow Bot
 
-import random
-import string
-from datetime import datetime, timedelta
-from io import BytesIO
-from telegram import InputFile
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
+from telegram import ChatMember
+from telegram.constants import ParseMode
+from datetime import datetime, timedelta, timezone
 
-from config import (
-    DIVIDER,
-    OWNER_ID,
-    IST_OFFSET_HOURS,
-    IST_OFFSET_MINUTES,
-    TIME_FORMAT,
-    BOT_NAME,
-    POWERED_BY
-)
+# India Time Offset
+IST_OFFSET = timedelta(hours=5, minutes=30)
 
-# ============================================================
-# 📌 TIME HANDLING
-# ============================================================
+DIVIDER = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+
+# =====================================================
+# 🕒 GET CURRENT IST TIME
+# =====================================================
 
 def ist_now():
-    """Return current Indian Standard Time."""
-    return datetime.utcnow() + timedelta(hours=IST_OFFSET_HOURS, minutes=IST_OFFSET_MINUTES)
+    return datetime.now(timezone.utc) + IST_OFFSET
 
 
-def format_time(dt_iso):
-    """Convert ISO → readable IST time."""
+def ist_format(ts: str):
+    """
+    Convert ISO timestamp to readable IST time.
+    """
     try:
-        dt = datetime.fromisoformat(dt_iso)
-        dt = dt + timedelta(hours=IST_OFFSET_HOURS, minutes=IST_OFFSET_MINUTES)
-        return dt.strftime(TIME_FORMAT)
+        dt = datetime.fromisoformat(ts)
+        dt = dt + IST_OFFSET
+        return dt.strftime("%Y-%m-%d %I:%M %p")
     except:
-        return "Unknown Time"
+        return ts
 
 
-# ============================================================
-# 📌 TRADE ID GENERATOR (100% UNIQUE)
-# ============================================================
+# =====================================================
+# 🧑 FORMAT USERNAME
+# =====================================================
 
-def generate_trade_id():
-    """Always generate a unique TID123456 style code."""
-    return "TID" + "".join(random.choices(string.digits, k=6))
-
-
-# ============================================================
-# 📌 PERMISSION CHECKS
-# ============================================================
-
-def is_owner(uid: int):
-    return uid == OWNER_ID
+def format_username(user):
+    if getattr(user, "username", None):
+        return f"@{user.username}"
+    if getattr(user, "first_name", None):
+        return user.first_name
+    return str(user.id)
 
 
-def require_admin(update, context, db_is_admin):
-    """Stop command if user isn't admin."""
-    uid = update.effective_user.id
-    if not db_is_admin(uid):
-        update.message.reply_text("⛔ *You are not an admin.*", parse_mode="Markdown")
+# =====================================================
+# 🛡 ENSURE BOT IS ADMIN IN GROUP
+# =====================================================
+
+async def ensure_bot_admin(update, context):
+    """
+    Ensures bot is admin before running group commands.
+    If not admin → block command + show message.
+    """
+    chat = update.effective_chat
+    bot_id = context.bot.id
+
+    member = await context.bot.get_chat_member(chat.id, bot_id)
+
+    if member.status not in [ChatMember.ADMINISTRATOR, ChatMember.OWNER]:
+        await update.message.reply_text(
+            "❌ *I must be an Admin in this group to manage deals.*\n\n"
+            "Please grant me permissions:\n"
+            "• Delete messages\n"
+            "• Manage messages\n"
+            "• Read all messages",
+            parse_mode=ParseMode.MARKDOWN
+        )
         return False
+
     return True
 
 
-# ============================================================
-# 📌 SMART REPLY + DELETE COMMAND
-# ============================================================
+# =====================================================
+# ❓ UNKNOWN COMMAND HANDLER
+# =====================================================
 
-async def smart_reply(update, text):
-    """Reply to replied message or command itself, then delete command."""
-    msg = update.message
-
-    target = msg.reply_to_message if msg.reply_to_message else msg
-
-    await target.reply_text(text, parse_mode="Markdown")
-
-    try:
-        await msg.delete()
-    except:
-        pass
-
-
-# ============================================================
-# 📌 DEAL MESSAGE TEMPLATES
-# ============================================================
-
-def deal_created_message(trade_id, buyer, seller, amount, escrower):
-    return (
-        f"💼 *New Escrow Deal Created*\n"
-        f"{DIVIDER}\n"
-        f"• *Trade ID:* `#{trade_id}`\n"
-        f"• *Buyer:* {buyer}\n"
-        f"• *Seller:* {seller}\n"
-        f"• *Amount:* ₹{amount:.2f}\n"
-        f"• *Escrower:* {escrower}\n\n"
-        f"⚡ Powered by {POWERED_BY}"
+async def unknown_cmd_handler(update, context):
+    await update.message.reply_text(
+        "❓ Unknown command.\nType /cmds if you are an admin.",
+        parse_mode=ParseMode.MARKDOWN
     )
-
-
-def deal_status_message(deal):
-    return (
-        f"📄 *Deal Status*\n"
-        f"{DIVIDER}\n"
-        f"• *Trade ID:* `#{deal['trade_id']}`\n"
-        f"• *Buyer:* {deal['buyer']}\n"
-        f"• *Seller:* {deal['seller']}\n"
-        f"• *Amount:* ₹{deal['amount']:.2f}\n"
-        f"• *Status:* `{deal['status']}`\n"
-        f"• *Created:* `{format_time(deal['created_at'])}`\n"
-        f"• *Updated:* `{format_time(deal['updated_at'])}`"
-    )
-
-
-def deal_close_message(deal):
-    return (
-        f"✅ *Deal Closed Successfully*\n"
-        f"{DIVIDER}\n"
-        f"• *Trade ID:* `#{deal['trade_id']}`\n"
-        f"• *Buyer:* {deal['buyer']}\n"
-        f"• *Seller:* {deal['seller']}\n"
-        f"• *Amount:* ₹{deal['amount']:.2f}\n"
-        f"• *Fee Charged:* ₹{deal['fee_amount']:.2f}\n"
-        f"• *Admin Earning:* ₹{deal['admin_earning']:.2f}\n\n"
-        f"🎉 Deal completed safely!"
-    )
-
-
-def notify_message(deal):
-    return (
-        f"⏰ *Deal Reminder Notification*\n"
-        f"{DIVIDER}\n"
-        f"• Trade ID: #{deal['trade_id']}\n"
-        f"• Buyer: {deal['buyer']}\n"
-        f"• Seller: {deal['seller']}\n"
-        f"• Amount: ₹{deal['amount']:.2f}\n"
-        f"• Status: {deal['status']}\n\n"
-        f"⚠️ Please complete the deal ASAP!"
-    )
-
-
-# ============================================================
-# 📌 PDF GENERATOR
-# ============================================================
-
-def generate_pdf(deals, filename="report.pdf"):
-    """Generate table-style PDF for escrow reports."""
-
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), topMargin=20)
-
-    styles = getSampleStyleSheet()
-
-    story = []
-
-    # Title
-    story.append(
-        Paragraph(f"<b>{BOT_NAME} — Escrow Report</b>", styles["Title"])
-    )
-    story.append(Spacer(1, 12))
-
-    # Table headers
-    data = [[
-        "ID", "Buyer", "Seller", "Amount (₹)",
-        "Status", "Created", "Updated"
-    ]]
-
-    # Fill rows
-    for row in deals:
-        data.append([
-            row["trade_id"],
-            row["buyer"],
-            row["seller"],
-            f"₹{row['amount']:.2f}",
-            row["status"],
-            format_time(row["created_at"]),
-            format_time(row["updated_at"]),
-        ])
-
-    table = Table(data)
-    table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.black),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ])
-    )
-
-    story.append(table)
-    story.append(Spacer(1, 12))
-
-    story.append(Paragraph(f"<i>Powered by {POWERED_BY}</i>", styles["Normal"]))
-
-    doc.build(story)
-
-    buffer.seek(0)
-    return InputFile(buffer, filename)
-
-
-# ============================================================
-# 📌 LOG WRITER (for log channels)
-# ============================================================
-
-async def send_logs(context, channels, text):
-    """Send log message to all registered channels."""
-    for row in channels:
-        try:
-            await context.bot.send_message(row["channel_id"], text)
-        except:
-            pass
