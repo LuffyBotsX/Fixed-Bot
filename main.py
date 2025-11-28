@@ -1,268 +1,189 @@
 #!/usr/bin/env python3
-# ===============================================================
-#  FULL 2025 PREMIUM ESCROW + MODERATION + PANEL + SPAM BOT
-#  PART 1 / 8 — CORE ENGINE, CONFIG, DATABASE, UTILITIES
-# ===============================================================
-
-import os
 import logging
-import asyncio
-from datetime import datetime, timezone, timedelta
-import json
-from io import BytesIO
-from typing import Optional, List, Dict, Any
-
-from pyrogram import Client, filters
-from pyrogram.types import (
-    Message,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    ChatPermissions,
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters
 )
 
-from pymongo import MongoClient
-
-# ===============================================================
-# CONFIGURATION
-# ===============================================================
-
-BOT_TOKEN = "8389093783:AAFLpMBDJ-0nZ3G4BQrBn_Y9JhsBOEy1Jcg"   # ← you will paste your token here
-OWNER_ID = 6847499628              # fixed owner id
-
-MONGO_URI = "mongodb://localhost:27017"
-DB_NAME = "mega_escrow_bot_2025"
-
-BOT_NAME = "Luffy Premium Escrow Bot 2025"
-POWERED_BY = "@LuffyBots"
-
-IST_OFFSET = timedelta(hours=5, minutes=30)
-DIVIDER = "══════════════════════════════════════"
-
-WELCOME_DEFAULT = (
-    "👋 Welcome {name}!\n"
-    "Please read the rules and trade safely.\n"
-    "Powered by @LuffyBots"
+# Import config + internal modules
+from config import BOT_TOKEN, LOGGING_FORMAT
+from database import init_database
+from handlers.admin import (
+    cmds_handler,
+    menu_handler,
+    panel_handler,
+    add_admin_handler,
+    remove_admin_handler,
+    admin_list_handler,
+    set_fee_handler,
+    reset_all_handler,
+    export_data_handler,
+    set_logs_handler,
+    remove_logs_handler,
+    show_logs_handler,
+    earnings_handler,
+    admin_earnings_handler,
+    admin_compare_handler,
+    top_admins_handler,
+)
+from handlers.deals import (
+    add_deal_handler,
+    close_deal_handler,
+    refund_deal_handler,
+    cancel_deal_handler,
+    update_deal_handler,
+    status_deal_handler,
+    ongoing_handler,
+    holding_handler,
+    notify_handler,
+)
+from handlers.user import (
+    start_handler,
+    stats_handler,
+    stats_tag_handler,
+    my_deals_handler,
+    find_handler,
+    today_handler,
+    week_handler,
+    escrow_pdf_handler,
+    history_pdf_handler,
+    global_stats_handler,
+    topuser_handler,
+)
+from handlers.moderation import (
+    warn_handler,
+    unwarn_handler,
+    warns_handler,
+    ban_handler,
+    unban_handler,
+    kick_handler,
+    mute_handler,
+    unmute_handler,
+    info_handler,
+    save_note_handler,
+    notes_handler,
+    clean_warns_handler,
+    clean_notes_handler,
+)
+from handlers.groups import (
+    set_group_handler,
+    remove_group_handler,
+    groups_handler,
+    set_welcome_handler,
+    set_farewell_handler,
+    toggle_welcome_handler,
+)
+from handlers.logs import (
+    test_handler,
+    chatid_handler,
 )
 
-FAREWELL_DEFAULT = (
-    "👋 {name} just left the group."
-)
+from utils import unknown_cmd_handler
 
-# ===============================================================
-# LOGGING
-# ===============================================================
 
+# --------------------- LOGGER ---------------------
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
+    format=LOGGING_FORMAT
 )
-log = logging.getLogger(__name__)
-
-# ===============================================================
-# DATABASE
-# ===============================================================
-
-mongo = MongoClient(MONGO_URI)
-db = mongo[DB_NAME]
-
-config_col      = db["config"]           # fee, welcome settings, spam settings
-admins_col      = db["admins"]           # admin_ids
-deals_col       = db["deals"]            # full escrow deals
-warns_col       = db["warns"]            # moderation warns
-notes_col       = db["notes"]            # saved notes
-groups_col      = db["groups"]           # registered groups
-log_channels    = db["log_channels"]     # logging channels
-antispam_col    = db["antispam"]         # spam settings per group
-joins_col       = db["joins"]            # join logs (anti-raid)
-welcome_col     = db["welcome"]          # welcome & leave settings
-
-# ===============================================================
-# UTILITY FUNCTIONS
-# ===============================================================
-
-def now_ist():
-    return datetime.now(timezone.utc) + IST_OFFSET
+logger = logging.getLogger(__name__)
 
 
-def is_owner(uid: int) -> bool:
-    return uid == OWNER_ID
+# --------------------- MAIN -----------------------
+def main():
+    logger.info("📦 Initializing database...")
+    init_database()
+
+    logger.info("🤖 Starting Era Escrow Bot...")
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # ========== USER COMMANDS ==========
+    app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("stats", stats_handler))
+    app.add_handler(CommandHandler("mydeals", my_deals_handler))
+    app.add_handler(CommandHandler("today", today_handler))
+    app.add_handler(CommandHandler("week", week_handler))
+    app.add_handler(CommandHandler("escrow", escrow_pdf_handler))
+    app.add_handler(CommandHandler("history", history_pdf_handler))
+    app.add_handler(CommandHandler("gstats", global_stats_handler))
+    app.add_handler(CommandHandler("topuser", topuser_handler))
+
+    # /stats @username
+    app.add_handler(MessageHandler(filters.Regex(r"^/stats\s+@"), stats_tag_handler))
+
+    # ========== DEAL COMMANDS ==========
+    app.add_handler(CommandHandler("add", add_deal_handler))
+    app.add_handler(CommandHandler("close", close_deal_handler))
+    app.add_handler(CommandHandler("refund", refund_deal_handler))
+    app.add_handler(CommandHandler("cancel", cancel_deal_handler))
+    app.add_handler(CommandHandler("update", update_deal_handler))
+    app.add_handler(CommandHandler("status", status_deal_handler))
+    app.add_handler(CommandHandler("ongoing", ongoing_handler))
+    app.add_handler(CommandHandler("holding", holding_handler))
+    app.add_handler(CommandHandler("notify", notify_handler))
+    app.add_handler(CommandHandler("find", find_handler))
+
+    # ========== ADMIN PANEL ==========
+    app.add_handler(CommandHandler("cmds", cmds_handler))
+    app.add_handler(CommandHandler("menu", menu_handler))
+    app.add_handler(CommandHandler("panel", panel_handler))
+    app.add_handler(CommandHandler("setfee", set_fee_handler))
+    app.add_handler(CommandHandler("addadmin", add_admin_handler))
+    app.add_handler(CommandHandler("removeadmin", remove_admin_handler))
+    app.add_handler(CommandHandler("adminlist", admin_list_handler))
+    app.add_handler(CommandHandler("reset_all", reset_all_handler))
+    app.add_handler(CommandHandler("export_data", export_data_handler))
+
+    # Logging channels
+    app.add_handler(CommandHandler("setlogs", set_logs_handler))
+    app.add_handler(CommandHandler("removelogs", remove_logs_handler))
+    app.add_handler(CommandHandler("tlogs", show_logs_handler))
+
+    # Admin earnings
+    app.add_handler(CommandHandler("earnings", earnings_handler))
+    app.add_handler(CommandHandler("myearnings", admin_earnings_handler))
+    app.add_handler(CommandHandler("adminwise", admin_compare_handler))
+    app.add_handler(CommandHandler("topadmins", top_admins_handler))
+
+    # ========== MODERATION ==========
+    app.add_handler(CommandHandler("warn", warn_handler))
+    app.add_handler(CommandHandler("dwarn", unwarn_handler))
+    app.add_handler(CommandHandler("warns", warns_handler))
+    app.add_handler(CommandHandler("ban", ban_handler))
+    app.add_handler(CommandHandler("unban", unban_handler))
+    app.add_handler(CommandHandler("kick", kick_handler))
+    app.add_handler(CommandHandler("mute", mute_handler))
+    app.add_handler(CommandHandler("unmute", unmute_handler))
+    app.add_handler(CommandHandler("info", info_handler))
+    app.add_handler(CommandHandler("save", save_note_handler))
+    app.add_handler(CommandHandler("notes", notes_handler))
+    app.add_handler(CommandHandler("clean_warns", clean_warns_handler))
+    app.add_handler(CommandHandler("clean_notes", clean_notes_handler))
+
+    # ========== GROUP / WELCOME ==========
+    app.add_handler(CommandHandler("setgroup", set_group_handler))
+    app.add_handler(CommandHandler("removegroup", remove_group_handler))
+    app.add_handler(CommandHandler("groups", groups_handler))
+    app.add_handler(CommandHandler("setwelcome", set_welcome_handler))
+    app.add_handler(CommandHandler("setfarewell", set_farewell_handler))
+    app.add_handler(CommandHandler("togglewelcome", toggle_welcome_handler))
+
+    # ========== UTILITIES ==========
+    app.add_handler(CommandHandler("test", test_handler))
+    app.add_handler(CommandHandler("chatid", chatid_handler))
+
+    # ========== CALLBACK QUERIES ==========
+    app.add_handler(CallbackQueryHandler(menu_handler))
+
+    # ========== UNKNOWN COMMAND ==========
+    app.add_handler(MessageHandler(filters.COMMAND, unknown_cmd_handler))
+
+    logger.info("🚀 Bot is now running...")
+    app.run_polling()
 
 
-def is_admin(uid: int) -> bool:
-    if uid == OWNER_ID:
-        return True
-    return admins_col.find_one({"_id": uid}) is not None
-
-
-def fmt_user(user) -> str:
-    if user.username:
-        return f"@{user.username}"
-    return user.first_name or str(user.id)
-
-
-def parse_amount(txt: str) -> Optional[float]:
-    if not txt:
-        return None
-    t = txt.lower().replace(",", "").strip()
-    mul = 1
-    if t.endswith("k"):
-        mul = 1000
-        t = t[:-1]
-    elif t.endswith("m"):
-        mul = 1_000_000
-        t = t[:-1]
-    try:
-        return float(t) * mul
-    except:
-        return None
-
-
-def calculate_fee(amount: float) -> float:
-    cfg = config_col.find_one({"_id": "fee"}) or {}
-    pct = cfg.get("percent", 3.0)
-    min_fee = cfg.get("min_fee", 5.0)
-    fee = max((amount * pct) / 100.0, min_fee)
-    return round(fee, 2)
-
-
-def escape_md(text: str) -> str:
-    return (text.replace("_", "\\_")
-                .replace("*", "\\*")
-                .replace("[", "\\[")
-                .replace("`", "\\`"))
-
-
-def ensure_base_config():
-    if not config_col.find_one({"_id": "fee"}):
-        config_col.insert_one({
-            "_id": "fee",
-            "percent": 3.0,
-            "min_fee": 5.0,
-            "updated": datetime.utcnow()
-        })
-
-    if not admins_col.find_one({"_id": OWNER_ID}):
-        admins_col.insert_one({
-            "_id": OWNER_ID,
-            "added_at": datetime.utcnow()
-        })
-
-    if not config_col.find_one({"_id": "welcome"}):
-        config_col.insert_one({
-            "_id": "welcome",
-            "enabled": True,
-            "message": WELCOME_DEFAULT,
-            "farewell": FAREWELL_DEFAULT
-        })
-
-    if not config_col.find_one({"_id": "spam"}):
-        config_col.insert_one({
-            "_id": "spam",
-            "enabled": True,
-            "max_msgs": 5,
-            "interval_sec": 4,
-            "action": "mute"  # ban/kick/mute
-        })
-
-
-def compute_fastest_escrow(user_id: int):
-    """Compute fastest escrow time for a user."""
-    completed = list(deals_col.find({
-        "admin_id": user_id,
-        "status": "completed"
-    }))
-
-    if len(completed) < 2:
-        return None
-
-    # difference between creation and completion
-    durations = []
-    for d in completed:
-        created = d.get("created_at")
-        completed_at = d.get("updated_at")
-        if created and completed_at:
-            durations.append((completed_at - created).total_seconds())
-
-    if not durations:
-        return None
-
-    sec = min(durations)
-    h = int(sec // 3600)
-    m = int((sec % 3600) // 60)
-    s = int(sec % 60)
-    out = []
-    if h > 0:
-        out.append(f"{h}h")
-    if m > 0:
-        out.append(f"{m}m")
-    if s > 0:
-        out.append(f"{s}s")
-    return " ".join(out) or "0s"
-
-
-def get_rank(user_id: int):
-    """Rank users by total volume."""
-    pipeline = [
-        {"$group": {"_id": "$admin_id", "vol": {"$sum": "$amount"}}},
-        {"$sort": {"vol": -1}}
-    ]
-    ranks = list(deals_col.aggregate(pipeline))
-    for i, r in enumerate(ranks, start=1):
-        if r["_id"] == user_id:
-            return i
-    return None
-
-
-def build_owner_panel():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("👑 Admins", callback_data="panel_admins"),
-            InlineKeyboardButton("⚙ Fee Config", callback_data="panel_fee")
-        ],
-        [
-            InlineKeyboardButton("📂 Export", callback_data="panel_export"),
-            InlineKeyboardButton("🗑 Reset", callback_data="panel_reset")
-        ],
-        [
-            InlineKeyboardButton("📢 Logs", callback_data="panel_logs"),
-            InlineKeyboardButton("📌 Groups", callback_data="panel_groups")
-        ],
-        [
-            InlineKeyboardButton("🔙 Close", callback_data="panel_close")
-        ]
-    ])
-
-
-def build_admin_menu():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📊 My Stats", callback_data="menu_stats"),
-            InlineKeyboardButton("💰 My Earnings", callback_data="menu_earn")
-        ],
-        [
-            InlineKeyboardButton("💼 Add Deal", callback_data="menu_adddeal"),
-            InlineKeyboardButton("📄 User Stats", callback_data="menu_userstats")
-        ],
-        [
-            InlineKeyboardButton("🔧 Moderation", callback_data="menu_moderation")
-        ],
-        [
-            InlineKeyboardButton("🔙 Close", callback_data="menu_close")
-        ]
-    ])
-
-# ===============================================================
-# INIT BOT
-# ===============================================================
-
-ensure_base_config()
-
-app = Client(
-    "main_bot",
-    api_id=0,
-    api_hash="none",
-    bot_token=BOT_TOKEN,
-    in_memory=True
-)
-
-log.info("PART 1 / 8 loaded successfully.")
+if __name__ == "__main__":
+    main()
