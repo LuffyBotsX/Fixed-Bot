@@ -1,29 +1,31 @@
 # handlers/admin.py
-# Admin & Owner-only commands
+# Admin & Owner command handlers for Era Escrow Bot
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
 
-from utils import ist_now
+from utils import ist_now, format_username, reply_and_clean
 from database import (
-    connect,
     is_admin,
     add_admin,
     remove_admin,
     list_admins,
     set_fee,
     get_fee,
+    set_logs,
+    remove_logs,
+    get_logs,
+    connect
 )
 
 DIVIDER = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
 OWNER_ONLY = "⛔ *Owner only command!*"
 ADMIN_ONLY = "⛔ *Admin only command!*"
 
 
 # ============================================================
-# 📌 /cmds – FULL COMMAND LIST (ADMIN)
+# 📌 /cmds – FULL ADMIN COMMAND LIST
 # ============================================================
 
 async def cmds_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,13 +72,16 @@ async def cmds_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/panel\n"
         "/reset_all confirm\n"
         "/export_data\n"
+        "/setlogs <chatid>\n"
+        "/removelogs\n"
+        "/tlogs\n"
     )
 
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /menu — ADMIN DASHBOARD (INLINE)
+# 📌 /menu – INLINE ADMIN DASHBOARD
 # ============================================================
 
 async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -100,23 +105,24 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================
-# 📌 /panel — OWNER CONTROL PANEL
+# 📌 /panel – OWNER PANEL
 # ============================================================
 
 async def panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-
-    if uid != 6847499628:  # OWNER ID
+    if update.effective_user.id != 6847499628:
         return await update.message.reply_text(OWNER_ONLY, parse_mode="Markdown")
 
     await update.message.reply_text(
         "👑 *Owner Panel*\n"
         f"{DIVIDER}\n"
-        "• /setfee <percent> <min_fee>\n"
-        "• /addadmin <id>\n"
-        "• /removeadmin <id>\n"
-        "• /reset_all confirm\n"
-        "• /export_data\n",
+        "/setfee <percent> <min_fee>\n"
+        "/addadmin <id>\n"
+        "/removeadmin <id>\n"
+        "/reset_all confirm\n"
+        "/export_data\n"
+        "/setlogs <chatid>\n"
+        "/removelogs\n"
+        "/tlogs",
         parse_mode="Markdown"
     )
 
@@ -125,15 +131,12 @@ async def panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 /setfee – CHANGE ESCROW FEE
 # ============================================================
 
-async def setfee_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_fee_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != 6847499628:
         return await update.message.reply_text(OWNER_ONLY, parse_mode="Markdown")
 
     if len(context.args) < 1:
-        return await update.message.reply_text(
-            "Usage: `/setfee <percent> <min_fee>`",
-            parse_mode="Markdown"
-        )
+        return await update.message.reply_text("Usage: `/setfee <percent> <min_fee>`", parse_mode="Markdown")
 
     try:
         percent = float(context.args[0])
@@ -146,8 +149,8 @@ async def setfee_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ *Fee Updated Successfully*\n"
         f"{DIVIDER}\n"
-        f"• Fee Percent: `{percent}%`\n"
-        f"• Minimum Fee: `₹{min_fee}`",
+        f"• Percent: `{percent}%`\n"
+        f"• Minimum: `₹{min_fee}`",
         parse_mode="Markdown"
     )
 
@@ -156,59 +159,49 @@ async def setfee_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 /addadmin – ADD ADMIN
 # ============================================================
 
-async def addadmin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-
-    if uid != 6847499628:
+async def add_admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != 6847499628:
         return await update.message.reply_text(OWNER_ONLY, parse_mode="Markdown")
 
     if not context.args:
-        return await update.message.reply_text("Usage: /addadmin <id>", parse_mode="Markdown")
+        return await update.message.reply_text("Usage: `/addadmin <userid>`", parse_mode="Markdown")
 
     try:
         admin_id = int(context.args[0])
     except:
-        return await update.message.reply_text("❗ Invalid user ID.", parse_mode="Markdown")
+        return await update.message.reply_text("❗ Invalid ID.", parse_mode="Markdown")
 
     add_admin(admin_id)
 
-    await update.message.reply_text(
-        f"👮 *Admin Added:* `{admin_id}`",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(f"👮 *Admin Added:* `{admin_id}`", parse_mode="Markdown")
 
 
 # ============================================================
 # 📌 /removeadmin – REMOVE ADMIN
 # ============================================================
 
-async def removeadmin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-
-    if uid != 6847499628:
+async def remove_admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != 6847499628:
         return await update.message.reply_text(OWNER_ONLY, parse_mode="Markdown")
 
     if not context.args:
-        return await update.message.reply_text("Usage: /removeadmin <id>", parse_mode="Markdown")
+        return await update.message.reply_text("Usage: `/removeadmin <userid>`", parse_mode="Markdown")
 
     try:
         admin_id = int(context.args[0])
     except:
-        return await update.message.reply_text("❗ Invalid user ID.", parse_mode="Markdown")
+        return await update.message.reply_text("❗ Invalid ID.", parse_mode="Markdown")
 
     remove_admin(admin_id)
 
-    await update.message.reply_text(
-        f"❌ *Admin Removed:* `{admin_id}`",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(f"❌ *Admin Removed:* `{admin_id}`", parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 /adminlist – SHOW ALL ADMINS
+# 📌 /adminlist – ALL ADMINS
 # ============================================================
 
-async def adminlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text(ADMIN_ONLY, parse_mode="Markdown")
 
@@ -223,7 +216,45 @@ async def adminlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================
-# 📌 /export_data – EXPORT FULL DATABASE
+# 📌 LOGGING CHANNELS (setlogs / removelogs / tlogs)
+# ============================================================
+
+async def set_logs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != 6847499628:
+        return await update.message.reply_text(OWNER_ONLY, parse_mode="Markdown")
+
+    if not context.args:
+        return await update.message.reply_text("Usage: `/setlogs <chatid>`", parse_mode="Markdown")
+
+    chat_id = int(context.args[0])
+    set_logs(chat_id)
+
+    await update.message.reply_text(f"📡 Logs channel set to `{chat_id}`", parse_mode="Markdown")
+
+
+async def remove_logs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != 6847499628:
+        return await update.message.reply_text(OWNER_ONLY, parse_mode="Markdown")
+
+    remove_logs()
+
+    await update.message.reply_text("🗑 Logs removed.", parse_mode="Markdown")
+
+
+async def show_logs_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text(ADMIN_ONLY, parse_mode="Markdown")
+
+    chat_id = get_logs()
+
+    if not chat_id:
+        return await update.message.reply_text("ℹ️ No logs channel set.", parse_mode="Markdown")
+
+    await update.message.reply_text(f"📡 Logs Channel: `{chat_id}`", parse_mode="Markdown")
+
+
+# ============================================================
+# 📌 DATABASE EXPORT (OWNER ONLY)
 # ============================================================
 
 async def export_data_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -234,7 +265,6 @@ async def export_data_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     cur = conn.cursor()
 
     tables = ["deals", "admins", "fees", "bans", "warns", "notes", "groups", "logs"]
-
     data = {}
 
     for t in tables:
@@ -255,7 +285,7 @@ async def export_data_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ============================================================
-# 📌 /reset_all – WIPE ALL DATA
+# 📌 RESET ALL DATA (OWNER ONLY)
 # ============================================================
 
 async def reset_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -264,7 +294,7 @@ async def reset_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args or context.args[0] != "confirm":
         return await update.message.reply_text(
-            "⚠️ Are you sure?\nUse:\n`/reset_all confirm`",
+            "⚠️ This will delete ALL data.\nUse:\n`/reset_all confirm`",
             parse_mode="Markdown"
         )
 
@@ -272,21 +302,17 @@ async def reset_all_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur = conn.cursor()
 
     tables = ["deals", "admins", "fees", "bans", "warns", "notes", "groups", "logs"]
-
     for t in tables:
         cur.execute(f"DELETE FROM {t}")
 
     conn.commit()
     conn.close()
 
-    await update.message.reply_text(
-        "🔥 *All data reset successfully!*",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("🔥 *All data reset successfully!*", parse_mode="Markdown")
 
 
 # ============================================================
-# 📌 EARNINGS PANEL — ALL ADMINS
+# 📌 EARNINGS PANEL
 # ============================================================
 
 async def earnings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,7 +321,7 @@ async def earnings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT created_by, SUM(admin_earning) as total FROM deals GROUP BY created_by")
+    cur.execute("SELECT created_by, SUM(admin_earning) AS total FROM deals GROUP BY created_by")
     rows = cur.fetchall()
     conn.close()
 
@@ -311,10 +337,10 @@ async def earnings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ============================================================
-# 📌 /myearnings – THIS ADMIN'S EARNINGS
+# 📌 /myearnings – ADMIN PERSONAL EARNING
 # ============================================================
 
-async def myearnings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_earnings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     if not is_admin(uid):
@@ -322,7 +348,7 @@ async def myearnings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT SUM(admin_earning) as total FROM deals WHERE created_by=?", (uid,))
+    cur.execute("SELECT SUM(admin_earning) AS total FROM deals WHERE created_by=?", (uid,))
     row = cur.fetchone()
     conn.close()
 
@@ -335,16 +361,16 @@ async def myearnings_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ============================================================
-# 📌 /adminwise – COMPARE ADMINS
+# 📌 /adminwise – COMPARE ALL ADMIN EARNINGS
 # ============================================================
 
-async def adminwise_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_compare_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text(ADMIN_ONLY, parse_mode="Markdown")
 
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT created_by, SUM(admin_earning) as total FROM deals GROUP BY created_by")
+    cur.execute("SELECT created_by, SUM(admin_earning) AS total FROM deals GROUP BY created_by")
     rows = cur.fetchall()
     conn.close()
 
@@ -363,13 +389,13 @@ async def adminwise_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 📌 /topadmins – RANK ADMIN EARNINGS
 # ============================================================
 
-async def topadmins_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def top_admins_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return await update.message.reply_text(ADMIN_ONLY, parse_mode="Markdown")
 
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT created_by, SUM(admin_earning) as total FROM deals GROUP BY created_by")
+    cur.execute("SELECT created_by, SUM(admin_earning) AS total FROM deals GROUP BY created_by")
     rows = cur.fetchall()
     conn.close()
 
@@ -377,7 +403,7 @@ async def topadmins_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "🏆 *Top Admins by Earnings*\n" + DIVIDER + "\n\n"
 
-    for i, r in enumerate(ranking, start=1):
-        text += f"#{i} — `{r['created_by']}` → ₹{r['total']:.2f}\n"
+    for idx, r in enumerate(ranking, start=1):
+        text += f"#{idx} — `{r['created_by']}` → ₹{r['total']:.2f}\n"
 
     await update.message.reply_text(text, parse_mode="Markdown")
